@@ -120,6 +120,15 @@ export_radio() {			# $1 = radio, its sections as uci export prints them
 		END { flush() }'
 }
 
+narrow160() {				# the three radio layout has no 160 MHz
+	uci -X show wireless 2>/dev/null |
+		sed -En "s/^wireless\.([^.]*)\.htmode='(VHT|HE|EHT)160'$/\1 \2/p" |
+		while read -r s ht; do
+			uci set "wireless.$s.htmode=${ht}80"
+			echo "$s: htmode ${ht}160 -> ${ht}80"
+		done
+}
+
 config() {				# $1 = new mode
 	if [ "$1" = 160 ]; then
 		for r in $(radio2); do
@@ -130,9 +139,12 @@ config() {				# $1 = new mode
 			echo "removed $r $ifs (no second 5 GHz radio in this mode,"
 			echo "  saved in $SAVE and restored when switching back)"
 		done
-	elif [ -f "$SAVE" ]; then
-		uci -m import wireless < "$SAVE" && rm -f "$SAVE"
-		echo "restored the second 5 GHz radio config"
+	else
+		if [ -f "$SAVE" ]; then
+			uci -m import wireless < "$SAVE" && rm -f "$SAVE"
+			echo "restored the second 5 GHz radio config"
+		fi
+		narrow160
 	fi
 	uci commit wireless
 }
