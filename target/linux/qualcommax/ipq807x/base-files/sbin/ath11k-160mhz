@@ -103,24 +103,35 @@ show() {
 
 # uci section of the second 5 GHz radio, gone in 160 MHz mode
 radio2() {
-	uci show wireless 2>/dev/null |
+	uci -X show wireless 2>/dev/null |
 		sed -n "s/^wireless\.\([^.]*\)\.path='.*wifi+2'$/\1/p"
+}
+
+ifaces() {				# $1 = radio
+	uci -X show wireless 2>/dev/null |
+		sed -n "s/^wireless\.\([^.]*\)\.device='$1'$/\1/p"
+}
+
+export_radio() {			# $1 = radio, its sections as uci export prints them
+	uci export wireless | awk -v r="$1" -v q="'" '
+		function flush() { if (keep) printf "%s", blk; blk = ""; keep = 0 }
+		/^config / { flush(); blk = $0 "\n"; keep = ($0 == "config wifi-device " q r q); next }
+		blk != "" { blk = blk $0 "\n"; if ($0 == "\toption device " q r q) keep = 1 }
+		END { flush() }'
 }
 
 config() {				# $1 = new mode
 	if [ "$1" = 160 ]; then
 		for r in $(radio2); do
-			ifaces=$(uci show wireless |
-				sed -n "s/^wireless\.\([^.]*\)\.device='$r'$/\1/p")
-			for s in $r $ifaces; do
-				uci show "wireless.$s" | sed 's/^/uci -q set /'
-			done >> "$SAVE"
-			for s in $ifaces $r; do uci -q delete "wireless.$s"; done
-			echo "removed $r $ifaces (no second 5 GHz radio in this mode,"
+			ifs=$(ifaces "$r")
+			[ -s "$SAVE" ] || echo "package wireless" > "$SAVE"
+			export_radio "$r" >> "$SAVE"
+			for s in $ifs $r; do uci -q delete "wireless.$s"; done
+			echo "removed $r $ifs (no second 5 GHz radio in this mode,"
 			echo "  saved in $SAVE and restored when switching back)"
 		done
 	elif [ -f "$SAVE" ]; then
-		. "$SAVE" && rm -f "$SAVE"
+		uci -m import wireless < "$SAVE" && rm -f "$SAVE"
 		echo "restored the second 5 GHz radio config"
 	fi
 	uci commit wireless
