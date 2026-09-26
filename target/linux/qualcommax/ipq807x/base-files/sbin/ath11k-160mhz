@@ -33,7 +33,8 @@
 #
 # A sysupgrade drops the modified board file and the device is back to three
 # radios, which is deliberate: keeping it would carry a stale board file past
-# an ipq-wifi update. Run this again after upgrading.
+# an ipq-wifi update. The saved radio config is kept and put back on the first
+# boot, so run this again after upgrading to return to 160 MHz.
 
 BOARD=/lib/firmware/ath11k/IPQ8074/hw2.0/board-2.bin
 ORIG=/rom$BOARD
@@ -141,6 +142,9 @@ config() {				# $1 = new mode
 		done
 	else
 		if [ -f "$SAVE" ]; then
+			for r in $(radio2); do
+				for s in $(ifaces "$r") $r; do uci -q delete "wireless.$s"; done
+			done
 			uci -m import wireless < "$SAVE" && rm -f "$SAVE"
 			echo "restored the second 5 GHz radio config"
 		fi
@@ -202,6 +206,15 @@ switch() {
 		exit 1
 	fi
 
+	# A save file at this point was never restored: the first boot after
+	# a sysupgrade did not get to it, or a settings backup brought it
+	# along. Adding to it would mix two radio configs on the way back.
+	if [ "$MODE" = 80 ] && [ -f "$SAVE" ]; then
+		echo "refusing to run: $SAVE holds a radio config that was not" \
+			"restored yet, run '${0##*/} 80' first" >&2
+		exit 1
+	fi
+
 	[ "$MODE" = 160 ] && MODE=80 || MODE=160
 
 	cp "$ORIG" "$BOARD" || exit 1
@@ -218,7 +231,12 @@ switch() {
 
 case "$1" in
 160)	[ "$MODE" = 160 ] && { echo "already $(show $MODE)"; exit 0; }; switch ;;
-80|3)	[ "$MODE" = 80 ] && { echo "already $(show $MODE)"; exit 0; }; switch ;;
+80|3)	if [ "$MODE" = 80 ]; then
+		[ -f "$SAVE" ] || { echo "already $(show $MODE)"; exit 0; }
+		config 80
+	else
+		switch
+	fi ;;
 toggle)	switch ;;
 status|"")
 	show "$MODE"; exit 0 ;;
