@@ -603,8 +603,7 @@ define Device/zyxel_nbg7815
 	SOC := ipq8074
 	DEVICE_PACKAGES := kmod-fs-f2fs f2fs-tools ipq-wifi-zyxel_nbg7815 kmod-ath11k-pci \
 		kmod-hci-uart kmod-hwmon-tmp103 kmod-hwmon-gpiofan \
-		kmod-leds-lp5569 \
-		bluez-daemon bluez-utils
+		kmod-leds-lp5569
 endef
 TARGET_DEVICES += zyxel_nbg7815
 

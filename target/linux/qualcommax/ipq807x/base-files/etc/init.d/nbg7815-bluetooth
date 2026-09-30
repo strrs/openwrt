@@ -64,7 +64,7 @@ start_service() {
 	}
 
 	[ -x /usr/bin/hciattach ] || {
-		echo "nbg7815-bluetooth: hciattach not found, install bluez-utils" >&2
+		echo "nbg7815-bluetooth: hciattach not found, install bluez-utils and bluez-daemon" >&2
 		return 1
 	}
 
