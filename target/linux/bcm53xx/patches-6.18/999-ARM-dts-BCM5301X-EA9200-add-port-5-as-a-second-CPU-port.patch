@@ -1,0 +1,25 @@
+From: Semih Baskan <strst.gs@gmail.com>
+Subject: [PATCH] ARM: dts: BCM5301X: EA9200: add port 5 as a second CPU port
+
+The EA9200 uses port 8 as its only CPU port. Enable port 5 (gmac0) as
+well, with the same fixed-link as port 8, so wan can be moved to it at
+runtime with the b53 change in 703.
+
+Signed-off-by: Semih Baskan <strst.gs@gmail.com>
+---
+--- a/arch/arm/boot/dts/broadcom/bcm4709-linksys-ea9200.dts
++++ b/arch/arm/boot/dts/broadcom/bcm4709-linksys-ea9200.dts
+@@ -214,7 +214,12 @@
+ 		};
+ 
+ 		port@5 {
+-			status = "disabled";
++			label = "cpu";
++
++			fixed-link {
++				speed = <1000>;
++				full-duplex;
++			};
+ 		};
+ 
+ 		port@7 {
