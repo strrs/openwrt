@@ -74,7 +74,7 @@ Signed-off-by: Rosen Penev <rosenp@gmail.com>
 +{
 +	struct b53_device *dev = ds->priv;
 +
-+	if (dev->chip_id == BCM58XX_DEVICE_ID &&
++	if ((dev->chip_id == BCM58XX_DEVICE_ID || is5301x(dev)) &&
 +	    dsa_is_cpu_port(ds, B53_CPU_PORT))
 +		return dsa_to_port(ds, B53_CPU_PORT);
 +
