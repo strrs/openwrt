@@ -1,1 +1,3 @@
 /etc/bluetooth/
+/etc/modules.d/ath11k-hw-mode
+/etc/nbg7815-160mhz.radio.save

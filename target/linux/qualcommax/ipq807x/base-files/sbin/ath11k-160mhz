@@ -1,0 +1,169 @@
+#!/bin/sh
+# Switch the NBG7815 between the two radio layouts its ath11k firmware offers:
+#
+#   3 radios: 2x 5 GHz 4x4, max 80 MHz + 2.4 GHz   (DBS_SBS, the default)
+#   2 radios: 1x 5 GHz 8x8, up to 160 MHz + 2.4 GHz (DBS)
+#
+# ath11k takes the highest priority mode the firmware advertises, DBS_SBS
+# here, unless its hw_mode parameter asks for another one. The parameter is
+# set in /etc/modules.d, where kmodloader picks it up at boot. The board file
+# is not touched.
+#
+# The uci sections of the second 5 GHz radio (path *wifi+2) have no phy in the
+# two radio layout. They are moved to a save file and restored when switching
+# back.
+#
+# The parameter file and the save file are listed in keep.d, so a sysupgrade
+# that keeps the settings keeps the layout and the radio config together.
+
+MODFILE=/etc/modules.d/ath11k-hw-mode
+PARAM=/sys/module/ath11k/parameters/hw_mode
+SAVE=/etc/nbg7815-160mhz.radio.save
+DEVICE=zyxel,nbg7815
+DBS=1
+
+. /lib/functions.sh
+
+board=$(board_name)
+[ "$board" = "$DEVICE" ] || {
+	echo "refusing to run: this is for $DEVICE, board is '${board:-unknown}'" >&2
+	exit 1; }
+
+# the layout asked for at the next driver load
+configured() {
+	local m
+
+	m=$(sed -n 's/^ath11k .*hw_mode=\([0-9]*\).*/\1/p' "$MODFILE" 2>/dev/null)
+	[ "$m" = "$DBS" ] && echo 160 || echo 80
+}
+
+# the layout the loaded driver brought up: two phys means DBS
+running() {
+	n=$(ls /sys/class/ieee80211 2>/dev/null | wc -l)
+	case "$n" in
+	2) echo 160 ;;
+	3) echo 80 ;;
+	*) echo none ;;
+	esac
+}
+
+show() {
+	case "$1" in
+	160) echo "2 radios: 1x 5 GHz (160 MHz) + 2.4 GHz" ;;
+	80) echo "3 radios: 2x 5 GHz (max 80 MHz) + 2.4 GHz" ;;
+	*) echo "no radios" ;;
+	esac
+}
+
+# uci section of the second 5 GHz radio, gone in 160 MHz mode
+radio2() {
+	uci -X show wireless 2>/dev/null |
+		sed -n "s/^wireless\.\([^.]*\)\.path='.*wifi+2'$/\1/p"
+}
+
+ifaces() {				# $1 = radio
+	uci -X show wireless 2>/dev/null |
+		sed -n "s/^wireless\.\([^.]*\)\.device='$1'$/\1/p"
+}
+
+export_radio() {			# $1 = radio, its sections as uci export prints them
+	uci export wireless | awk -v r="$1" -v q="'" '
+		function flush() { if (keep) printf "%s", blk; blk = ""; keep = 0 }
+		/^config / { flush(); blk = $0 "\n"; keep = ($0 == "config wifi-device " q r q); next }
+		blk != "" { blk = blk $0 "\n"; if ($0 == "\toption device " q r q) keep = 1 }
+		END { flush() }'
+}
+
+narrow160() {				# the three radio layout has no 160 MHz
+	uci -X show wireless 2>/dev/null |
+		sed -En "s/^wireless\.([^.]*)\.htmode='(VHT|HE|EHT)160'$/\1 \2/p" |
+		while read -r s ht; do
+			uci set "wireless.$s.htmode=${ht}80"
+			echo "$s: htmode ${ht}160 -> ${ht}80"
+		done
+}
+
+config() {				# $1 = new mode
+	if [ "$1" = 160 ]; then
+		for r in $(radio2); do
+			ifs=$(ifaces "$r")
+			[ -s "$SAVE" ] || echo "package wireless" > "$SAVE"
+			export_radio "$r" >> "$SAVE"
+			for s in $ifs $r; do uci -q delete "wireless.$s"; done
+			echo "removed $r $ifs (no second 5 GHz radio in this mode,"
+			echo "  saved in $SAVE and restored when switching back)"
+		done
+	else
+		if [ -f "$SAVE" ]; then
+			for r in $(radio2); do
+				for s in $(ifaces "$r") $r; do uci -q delete "wireless.$s"; done
+			done
+			uci -m import wireless < "$SAVE" && rm -f "$SAVE"
+			echo "restored the second 5 GHz radio config"
+		fi
+		narrow160
+	fi
+	uci commit wireless
+}
+
+reload() {
+	local opts
+
+	opts=$(sed -n 's/^ath11k //p' "$MODFILE" 2>/dev/null)
+	wifi down 2>/dev/null
+	for m in ath11k_pci ath11k_ahb ath11k; do
+		grep -q "^$m " /proc/modules && rmmod $m
+	done
+	sleep 2
+	insmod ath11k $opts
+	insmod ath11k_ahb
+	insmod ath11k_pci 2>/dev/null
+	sleep 15
+	wifi up 2>/dev/null
+	echo "radios now: $(ls /sys/class/ieee80211/ | tr '\n' ' ')"
+}
+
+switch() {				# $1 = new mode
+	if [ "$1" = 160 ]; then
+		# a driver without the parameter only warns about it and keeps
+		# three radios, while the config would already lack the third
+		[ -e "$PARAM" ] || {
+			echo "refusing to run: the loaded ath11k has no hw_mode parameter" >&2
+			exit 1; }
+		echo "ath11k hw_mode=$DBS" > "$MODFILE"
+	else
+		rm -f "$MODFILE"
+	fi
+	config "$1"
+	echo "switched to: $(show "$1")"
+}
+
+MODE=$(configured)
+
+case "$1" in
+160)	[ "$MODE" = 160 ] && { echo "already $(show 160)"; exit 0; }
+	switch 160 ;;
+80|3)	if [ "$MODE" = 80 ]; then
+		[ -f "$SAVE" ] || { echo "already $(show 80)"; exit 0; }
+		config 80
+	else
+		switch 80
+	fi ;;
+toggle)	if [ "$MODE" = 160 ]; then switch 80; else switch 160; fi ;;
+status|"")
+	RUN=$(running)
+	if [ "$RUN" = "$MODE" ]; then
+		show "$MODE"
+	else
+		echo "running: $(show "$RUN")"
+		echo "configured: $(show "$MODE"), applied at the next reboot or" \
+			"with '${0##*/} $MODE reload'"
+	fi
+	exit 0 ;;
+*)	echo "usage: ${0##*/} [status|160|80|toggle] [reload]" >&2; exit 1 ;;
+esac
+
+case "$2" in
+reload)	reload; echo "a reboot is still recommended to start from a clean state" ;;
+*)	echo "reboot to apply (recommended), or run '${0##*/} $1 reload'" ;;
+esac
