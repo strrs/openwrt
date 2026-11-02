@@ -141,11 +141,19 @@ switch() {				# $1 = new mode
 MODE=$(configured)
 
 case "$1" in
-160)	[ "$MODE" = 160 ] && { echo "already $(show 160)"; exit 0; }
-	switch 160 ;;
+160)	if [ "$MODE" = 160 ]; then
+		[ "$(running)" = 160 ] && { echo "already $(show 160)"; exit 0; }
+		echo "already configured: $(show 160), not running yet"
+	else
+		switch 160
+	fi ;;
 80|3)	if [ "$MODE" = 80 ]; then
-		[ -f "$SAVE" ] || { echo "already $(show 80)"; exit 0; }
-		config 80
+		if [ -f "$SAVE" ]; then
+			config 80
+		else
+			[ "$(running)" = 80 ] && { echo "already $(show 80)"; exit 0; }
+			echo "already configured: $(show 80), not running yet"
+		fi
 	else
 		switch 80
 	fi ;;
