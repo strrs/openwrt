@@ -94,6 +94,15 @@ BDFLEN=$(rd $((BDF - 4)) 4)
 TOPO=$(rd $((BDF + 64)) 1)
 [ $((TOPO / BIT % 2)) = 1 ] && MODE=160 || MODE=80
 
+# the layout the loaded driver brought up: two phys means 160 MHz
+running() {
+	case "$(ls /sys/class/ieee80211 2>/dev/null | wc -l)" in
+	2) echo 160 ;;
+	3) echo 80 ;;
+	*) echo none ;;
+	esac
+}
+
 show() {
 	if [ "$1" = 160 ]; then
 		echo "2 radios: 1x 5 GHz (160 MHz) + 2.4 GHz"
@@ -230,10 +239,19 @@ switch() {
 }
 
 case "$1" in
-160)	[ "$MODE" = 160 ] && { echo "already $(show $MODE)"; exit 0; }; switch ;;
+160)	if [ "$MODE" = 160 ]; then
+		[ "$(running)" = 160 ] && { echo "already $(show "$MODE")"; exit 0; }
+		echo "already configured: $(show "$MODE"), not running yet"
+	else
+		switch
+	fi ;;
 80|3)	if [ "$MODE" = 80 ]; then
-		[ -f "$SAVE" ] || { echo "already $(show $MODE)"; exit 0; }
-		config 80
+		if [ -f "$SAVE" ]; then
+			config 80
+		else
+			[ "$(running)" = 80 ] && { echo "already $(show "$MODE")"; exit 0; }
+			echo "already configured: $(show "$MODE"), not running yet"
+		fi
 	else
 		switch
 	fi ;;
