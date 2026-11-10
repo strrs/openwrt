@@ -1,0 +1,117 @@
+From 13f06ebd7fa6348eac1c6b6577c08504d187c8b1 Mon Sep 17 00:00:00 2001
+From: Julius Bairaktaris <julius@bairaktaris.de>
+Date: Tue, 10 Nov 2026 12:03:26 +0000
+Subject: [PATCH] wifi: ath11k: select the hardware mode by machine compatible
+
+ath11k always uses the highest priority hardware mode the firmware
+advertises. On the Zyxel NBG7815 that is DBS+SBS, which splits the
+eight 5 GHz chains between two radios, neither with a 160 MHz channel
+width. The vendor firmware runs the board in DBS, one 5 GHz radio with
+all eight chains and 160 MHz.
+
+Add a table of hardware revision, machine compatible and hardware mode,
+like ath11k_core_usecase_firmware_table[], with one entry that selects
+DBS for the NBG7815. If the firmware advertises the mode of the matching
+entry, use it; otherwise warn with the modes it does advertise and keep
+the default. Boards without an entry are not affected.
+
+Tested-on: IPQ8074 hw2.0 AHB WLAN.HK.2.9.0.1-02146-QCAHKSWPL_SILICONZ-1
+
+Co-developed-by: Semih Baskan <strst.gs@gmail.com>
+Signed-off-by: Semih Baskan <strst.gs@gmail.com>
+---
+--- a/drivers/net/wireless/ath/ath11k/core.c
++++ b/drivers/net/wireless/ath/ath11k/core.c
+@@ -1215,6 +1215,31 @@ const char *ath11k_core_get_usecase_firm
+ }
+ EXPORT_SYMBOL(ath11k_core_get_usecase_firmware);
+ 
++static const struct __ath11k_core_board_hw_mode_table {
++	u32 hw_rev;
++	const char *compatible;
++	enum wmi_host_hw_mode_config_type hw_mode;
++} ath11k_core_board_hw_mode_table[] = {
++	{ ATH11K_HW_IPQ8074, "zyxel,nbg7815", WMI_HOST_HW_MODE_DBS },
++	{ /* Sentinel */ }
++};
++
++enum wmi_host_hw_mode_config_type
++ath11k_core_get_board_hw_mode(struct ath11k_base *ab)
++{
++	const struct __ath11k_core_board_hw_mode_table *entry;
++
++	entry = ath11k_core_board_hw_mode_table;
++	while (entry->compatible) {
++		if (ab->hw_rev == entry->hw_rev &&
++		    of_machine_is_compatible(entry->compatible))
++			return entry->hw_mode;
++		entry++;
++	}
++
++	return WMI_HOST_HW_MODE_MAX;
++}
++
+ void ath11k_fw_stats_pdevs_free(struct list_head *head)
+ {
+ 	struct ath11k_fw_stats_pdev *i, *tmp;
+--- a/drivers/net/wireless/ath/ath11k/core.h
++++ b/drivers/net/wireless/ath/ath11k/core.h
+@@ -1299,6 +1299,8 @@ bool ath11k_core_coldboot_cal_support(st
+ const struct firmware *ath11k_core_firmware_request(struct ath11k_base *ab,
+ 						    const char *filename);
+ const char *ath11k_core_get_usecase_firmware(struct ath11k_base *ab);
++enum wmi_host_hw_mode_config_type
++ath11k_core_get_board_hw_mode(struct ath11k_base *ab);
+ 
+ static inline const char *ath11k_scan_state_str(enum ath11k_scan_state state)
+ {
+--- a/drivers/net/wireless/ath/ath11k/wmi.c
++++ b/drivers/net/wireless/ath/ath11k/wmi.c
+@@ -4760,9 +4760,9 @@ static int ath11k_wmi_tlv_hw_mode_caps(s
+ 				       u16 len, const void *ptr, void *data)
+ {
+ 	struct wmi_tlv_svc_rdy_ext_parse *svc_rdy_ext = data;
+-	struct wmi_hw_mode_capabilities *hw_mode_caps;
+-	enum wmi_host_hw_mode_config_type mode, pref;
+-	u32 i;
++	struct wmi_hw_mode_capabilities *hw_mode_caps, *board_caps = NULL;
++	enum wmi_host_hw_mode_config_type mode, pref, board_mode;
++	u32 i, modes = 0;
+ 	int ret;
+ 
+ 	svc_rdy_ext->n_hw_mode_caps = 0;
+@@ -4776,6 +4776,8 @@ static int ath11k_wmi_tlv_hw_mode_caps(s
+ 		return ret;
+ 	}
+ 
++	board_mode = ath11k_core_get_board_hw_mode(soc);
++
+ 	for (i = 0; i < svc_rdy_ext->n_hw_mode_caps; i++) {
+ 		hw_mode_caps = &svc_rdy_ext->hw_mode_caps[i];
+ 		mode = hw_mode_caps->hw_mode_id;
+@@ -4783,6 +4785,10 @@ static int ath11k_wmi_tlv_hw_mode_caps(s
+ 		if (mode >= WMI_HOST_HW_MODE_MAX)
+ 			continue;
+ 
++		modes |= BIT(mode);
++		if (mode == board_mode)
++			board_caps = hw_mode_caps;
++
+ 		pref = soc->wmi_ab.preferred_hw_mode;
+ 
+ 		if (ath11k_hw_mode_pri_map[mode] < ath11k_hw_mode_pri_map[pref]) {
+@@ -4791,6 +4797,14 @@ static int ath11k_wmi_tlv_hw_mode_caps(s
+ 		}
+ 	}
+ 
++	if (board_caps) {
++		svc_rdy_ext->pref_hw_mode_caps = *board_caps;
++		soc->wmi_ab.preferred_hw_mode = board_mode;
++	} else if (board_mode != WMI_HOST_HW_MODE_MAX) {
++		ath11k_warn(soc, "hw mode %d not supported (modes 0x%x), using %d\n",
++			    board_mode, modes, soc->wmi_ab.preferred_hw_mode);
++	}
++
+ 	ath11k_dbg(soc, ATH11K_DBG_WMI, "preferred_hw_mode:%d\n",
+ 		   soc->wmi_ab.preferred_hw_mode);
+ 	if (soc->wmi_ab.preferred_hw_mode == WMI_HOST_HW_MODE_MAX)
