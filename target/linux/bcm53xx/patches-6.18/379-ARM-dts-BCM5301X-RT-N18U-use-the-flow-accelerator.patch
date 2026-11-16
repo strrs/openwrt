@@ -1,0 +1,47 @@
+From dfaebe5eddaea225a247334f3e56212bf476f69c Mon Sep 17 00:00:00 2001
+From: Semih Baskan <strst.gs@gmail.com>
+Date: Mon, 16 Nov 2026 09:16:04 +0000
+Subject: [PATCH] ARM: dts: BCM5301X: RT-N18U: use the flow accelerator
+
+Use the prepended Broadcom tag on port 8, the CPU port, so that the
+flow accelerator in front of it is in the path. Describe port 5 (gmac0)
+as a second CPU port with a fixed link for the switch's trap rules (TTL
+0 and 1, TCP FIN and RST). A switch tree has one tagger, so port 5
+names brcm-prepend too, which uses the regular tag on that port. The
+two ports follow the EA6900 patches of the flow accelerator series.
+This RT-N18U's switch reports revision 5 at boot ("found switch:
+BCM53011, rev 5"), which has the accelerator.
+
+Measured on an RT-N18U: one TCP stream from the LAN to a host behind the
+WAN port runs through the accelerator at 948 Mbit/s, and at 949 Mbit/s
+the other way.
+
+Signed-off-by: Semih Baskan <strst.gs@gmail.com>
+---
+ arch/arm/boot/dts/broadcom/bcm47081-asus-rt-n18u.dts | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+--- a/arch/arm/boot/dts/broadcom/bcm47081-asus-rt-n18u.dts
++++ b/arch/arm/boot/dts/broadcom/bcm47081-asus-rt-n18u.dts
+@@ -134,11 +134,20 @@
+ 		};
+ 
+ 		port@5 {
+-			status = "disabled";
++			dsa-tag-protocol = "brcm-prepend";
++
++			fixed-link {
++				speed = <1000>;
++				full-duplex;
++			};
+ 		};
+ 
+ 		port@7 {
+ 			status = "disabled";
+ 		};
++
++		port@8 {
++			dsa-tag-protocol = "brcm-prepend";
++		};
+ 	};
+ };
