@@ -1,0 +1,258 @@
+From 2ce9f65354982b4edc3b679a22837c8e3bf8006a Mon Sep 17 00:00:00 2001
+From: Semih Baskan <strst.gs@gmail.com>
+Date: Mon, 23 Nov 2026 05:04:11 +0000
+Subject: [PATCH] net: dsa: b53: keep bridge addresses on one CPU port
+
+DSA installs the address of a bridge, and the addresses of its ports,
+on the CPU port of each bridged port, and counts them per CPU port. The
+ARL has one entry per address and VID for all bridges, as b53 has no
+FDB isolation, and a unicast entry names a single port. When a bridged
+port moves to another CPU port, the entry for the bridge's address is
+rewritten to the new CPU port. When the port moves back, the entry is
+deleted, although the other CPU port still holds the address.
+
+With several CPU ports, a user port forwards only to its own CPU port,
+so a frame that hits the entry is dropped when it comes in on a port of
+the other CPU port. While a bridged port is on another CPU port, the
+bridged ports it left cannot reach the host. Once it is back, the
+bridge's address has no entry, and unicast to the host is flooded to
+every port of the bridge from then on. A standalone port has no host
+address on this switch, but frames to its own address hit the bridge's
+entry when it shares that address, which is what a port without an
+address from the device tree takes from its conduit on boards whose
+conduits carry the LAN address.
+
+Seen on an RT-N18U (BCM53011) with CPU ports 5 and 8: moving one bridged
+port to port 5 rewrote the static entry of the bridge's address from
+port 8 to port 5, and the frames of the other bridged ports to the host
+were counted at their ingress and sent to no CPU port. After the move
+back the entry was invalid, and frames to the host were flooded to the
+other bridged ports. With a second bridged port still on port 5, the
+entry stayed on port 5 after the first one moved back. A standalone
+port that carried the bridge's address received no unicast while it
+was on port 5.
+
+An address can reach the host through one CPU port only. Refuse, with
+-EBUSY, at these points, when a port would need an address on its CPU
+port that a bridge or a bridged port on another CPU port uses:
+
+- Moving a port to another CPU port. A bridged port needs its bridge's
+  address, its current one, which the bridge keeps as a local entry,
+  and the one it carries on the new conduit. A standalone port that is
+  up needs the latter. dsa_port_change_conduit() sets that address
+  after this check: the one from the device tree if dp->mac holds one,
+  the new conduit's otherwise, also when user space has set another.
+  Judging it here keeps a bridged port from rejoining its bridge with
+  an address that b53_br_join() refuses, as the port has moved by then
+  and stays moved.
+- Adding a port to a bridge: the bridge's address and the port's.
+- Changing the address of a bridged port, or of a port that is up,
+  through .port_set_mac_address.
+- Bringing up a standalone port. A port that moved while it was down
+  may have been given another address before it came up, which is the
+  order in which netifd changes the conduit of a port, so it is judged
+  when it comes up, with the address it then has. felix judges ports
+  at bring-up in the same way: felix_port_enable() refuses a port whose
+  conduit does not fit (drivers/net/dsa/ocelot/felix.c).
+
+Two cases are not judged. An address set on a bridge after its ports
+joined reaches the driver only as a host address to install, and DSA
+offers no point to refuse it. And a bridge is not refused because of
+a standalone port elsewhere, which would make the order in which ports
+come up decide which side fails: a standalone port that is up on one
+CPU port when a bridge with its address forms on the other gets no
+unicast to that address.
+
+As only an address from the device tree stays with a port across a
+move, a bridged LAN port on a board whose conduits carry the LAN
+address cannot move to the other CPU port: it would carry the LAN
+address there. A bridge for the other CPU port is built there: its
+ports are moved while down, given their own addresses, and then added.
+Bridges with different addresses can use different CPU ports, and a
+standalone port with an address from the device tree can move.
+
+-EOPNOTSUPP is not used for the join: DSA would then bridge the port in
+software, and its frames to the bridge's address would still hit the
+entry on the other CPU port.
+
+Also refuse a conduit that belongs to another switch, with the check
+and message of mt753x_port_change_conduit() in
+drivers/net/dsa/mt7530.c: the port based VLAN mask takes the index of
+the conduit's CPU port as a port of this switch.
+
+Measured on the same board with this change: moving a port to port 5,
+adding a port to a bridge, changing a port's address, or bringing up a
+port failed with -EBUSY whenever the port would have needed an address
+that a bridge on the other CPU port used. A refused port stayed on its
+CPU port with its address; a bridged one had been taken out of the
+bridge offload by DSA and was added back. The bridge's address kept
+its static entry on port 8, and the other bridged ports kept reaching
+the host without flooding. A standalone port with an address from the
+device tree moved to port 5 and back, and a bridge with its own
+address was set up on port 5 from a port moved there while down.
+
+Signed-off-by: Semih Baskan <strst.gs@gmail.com>
+---
+ drivers/net/dsa/b53/b53_common.c |   96 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 93 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/dsa/b53/b53_common.c
++++ b/drivers/net/dsa/b53/b53_common.c
+@@ -856,11 +856,37 @@ static void b53_conduit_state_change(str
+ 	b53_fa_trap_update(dev, -1, -1);
+ }
+ 
++static bool b53_host_addr_elsewhere(struct dsa_switch *ds, int port,
++				    const u8 *addr,
++				    const struct dsa_port *cpu_dp)
++{
++	const struct net_device *br;
++	struct dsa_port *dp;
++
++	dsa_switch_for_each_user_port(dp, ds) {
++		br = dsa_port_bridge_dev_get(dp);
++		if (dp->index == port || !br || dp->cpu_dp == cpu_dp)
++			continue;
++
++		if (ether_addr_equal(addr, br->dev_addr) ||
++		    ether_addr_equal(addr, dp->user->dev_addr))
++			return true;
++	}
++
++	return false;
++}
++
+ static int b53_port_change_conduit(struct dsa_switch *ds, int port,
+ 				   struct net_device *conduit,
+ 				   struct netlink_ext_ack *extack)
+ {
+-	struct b53_device *dev = ds->priv;
++	const struct dsa_port *cpu_dp = conduit->dsa_ptr;
++	struct dsa_port *dp = dsa_to_port(ds, port);
++	struct net_device *user = dp->user;
++	struct b53_device *dev = ds->priv;
++	const struct net_device *br;
++	const u8 *addr;
++	bool busy;
+ 	u16 pvlan;
+ 
+ 	if (netif_is_lag_master(conduit)) {
+@@ -868,6 +894,32 @@ static int b53_port_change_conduit(struc
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	if (cpu_dp->ds != ds) {
++		NL_SET_ERR_MSG_MOD(extack,
++				   "Cannot assign a conduit on a different switch");
++		return -EOPNOTSUPP;
++	}
++
++	/* the address dsa_port_change_conduit() leaves on the port */
++	addr = is_zero_ether_addr(dp->mac) ? conduit->dev_addr : user->dev_addr;
++
++	if (netif_is_bridge_port(user)) {
++		br = netdev_master_upper_dev_get(user);
++		busy = b53_host_addr_elsewhere(ds, port, br->dev_addr,
++					       cpu_dp) ||
++		       b53_host_addr_elsewhere(ds, port, user->dev_addr,
++					       cpu_dp) ||
++		       b53_host_addr_elsewhere(ds, port, addr, cpu_dp);
++	} else {
++		busy = netif_running(user) &&
++		       b53_host_addr_elsewhere(ds, port, addr, cpu_dp);
++	}
++	if (busy) {
++		NL_SET_ERR_MSG_MOD(extack,
++				   "Bridge address in use on another CPU port");
++		return -EBUSY;
++	}
++
+ 	b53_read16(dev, B53_PVLAN_PAGE, B53_PVLAN_PORT_MASK(port), &pvlan);
+ 	pvlan &= ~dsa_cpu_ports(ds);
+ 	pvlan |= BIT(conduit->dsa_ptr->index);
+@@ -878,6 +930,25 @@ static int b53_port_change_conduit(struc
+ 	return 0;
+ }
+ 
++static int b53_port_set_mac_address(struct dsa_switch *ds, int port,
++				    const unsigned char *addr)
++{
++	struct dsa_port *dp = dsa_to_port(ds, port);
++
++	/* a standalone port that is down is judged when it comes up */
++	if (!dsa_port_bridge_dev_get(dp) && !netif_running(dp->user))
++		return 0;
++
++	if (b53_host_addr_elsewhere(ds, port, addr, dp->cpu_dp)) {
++		dev_err(ds->dev,
++			"port %d: %pM: bridge address in use on another CPU port\n",
++			port, addr);
++		return -EBUSY;
++	}
++
++	return 0;
++}
++
+ /* Keep port 8 as the default CPU port of BCM5301x and BCM58xx when
+  * another one is described: ports can move to it with
+  * port_change_conduit, and on BCM5301x it can take the flow accelerator
+@@ -1014,6 +1085,7 @@ EXPORT_SYMBOL(b53_setup_port);
+ 
+ int b53_enable_port(struct dsa_switch *ds, int port, struct phy_device *phy)
+ {
++	struct dsa_port *dp = dsa_to_port(ds, port);
+ 	struct b53_device *dev = ds->priv;
+ 	unsigned int cpu_port;
+ 	int ret = 0;
+@@ -1022,7 +1094,15 @@ int b53_enable_port(struct dsa_switch *d
+ 	if (!dsa_is_user_port(ds, port))
+ 		return 0;
+ 
+-	cpu_port = dsa_to_port(ds, port)->cpu_dp->index;
++	if (!dsa_port_bridge_dev_get(dp) &&
++	    b53_host_addr_elsewhere(ds, port, dp->user->dev_addr, dp->cpu_dp)) {
++		dev_err(ds->dev,
++			"port %d: %pM: bridge address in use on another CPU port\n",
++			port, dp->user->dev_addr);
++		return -EBUSY;
++	}
++
++	cpu_port = dp->cpu_dp->index;
+ 
+ 	if (dev->ops->phy_enable)
+ 		dev->ops->phy_enable(dev, port);
+@@ -2619,9 +2699,10 @@ EXPORT_SYMBOL(b53_mdb_del);
+ int b53_br_join(struct dsa_switch *ds, int port, struct dsa_bridge bridge,
+ 		bool *tx_fwd_offload, struct netlink_ext_ack *extack)
+ {
++	struct dsa_port *dp = dsa_to_port(ds, port);
+ 	struct b53_device *dev = ds->priv;
+ 	struct b53_vlan *vl;
+-	s8 cpu_port = dsa_to_port(ds, port)->cpu_dp->index;
++	s8 cpu_port = dp->cpu_dp->index;
+ 	u16 pvlan, reg, pvid;
+ 	unsigned int i;
+ 
+@@ -2631,6 +2712,14 @@ int b53_br_join(struct dsa_switch *ds, i
+ 	if (dev->chip_id == BCM7278_DEVICE_ID && port == 7)
+ 		return -EINVAL;
+ 
++	if (b53_host_addr_elsewhere(ds, port, bridge.dev->dev_addr,
++				    dp->cpu_dp) ||
++	    b53_host_addr_elsewhere(ds, port, dp->user->dev_addr, dp->cpu_dp)) {
++		NL_SET_ERR_MSG_MOD(extack,
++				   "Bridge address in use on another CPU port");
++		return -EBUSY;
++	}
++
+ 	pvid = b53_default_pvid(dev);
+ 	vl = &dev->vlans[pvid];
+ 
+@@ -3096,6 +3185,7 @@ static const struct dsa_switch_ops b53_s
+ 	.preferred_default_local_cpu_port = b53_preferred_default_local_cpu_port,
+ 	.conduit_state_change	= b53_conduit_state_change,
+ 	.port_change_conduit	= b53_port_change_conduit,
++	.port_set_mac_address	= b53_port_set_mac_address,
+ 	.setup			= b53_setup,
+ 	.teardown		= b53_teardown,
+ 	.get_strings		= b53_get_strings,
