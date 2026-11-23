@@ -1,0 +1,46 @@
+From 24126ff929100213e77049a91f7d96bc0640db82 Mon Sep 17 00:00:00 2001
+From: Semih Baskan <strst.gs@gmail.com>
+Date: Mon, 23 Nov 2026 12:41:46 +0000
+Subject: [PATCH] ARM: dts: BCM5301X: RT-N18U: drop the flow accelerator tag
+
+Patch 379 names the prepended Broadcom tag on ports 5 and 8, so the
+flow accelerator is in the path on every boot, whether hardware flow
+offloading is on or not. Drop those lines and the port 8 node that
+only carried one of them. The switch then boots with the regular tag,
+and the bcm53xx preinit hook moves it to the prepended tag when the
+firewall's flow offloading and hardware flow offloading are both on.
+
+Port 5 stays a CPU port with its fixed link, for the switch's trap
+rules. User ports keep port 8 as their CPU port.
+
+Measured on an RT-N18U: with hardware flow offloading off the switch
+kept the regular tag and the accelerator stayed out of the path; with
+both options on the hook moved it to the prepended tag at boot and a
+TCP stream ran through the accelerator at 949 Mbit/s.
+
+Signed-off-by: Semih Baskan <strst.gs@gmail.com>
+---
+ arch/arm/boot/dts/broadcom/bcm47081-asus-rt-n18u.dts | 6 ------
+ 1 file changed, 6 deletions(-)
+
+--- a/arch/arm/boot/dts/broadcom/bcm47081-asus-rt-n18u.dts
++++ b/arch/arm/boot/dts/broadcom/bcm47081-asus-rt-n18u.dts
+@@ -137,8 +137,6 @@
+ 		};
+ 
+ 		port@5 {
+-			dsa-tag-protocol = "brcm-prepend";
+-
+ 			fixed-link {
+ 				speed = <1000>;
+ 				full-duplex;
+@@ -148,9 +146,5 @@
+ 		port@7 {
+ 			status = "disabled";
+ 		};
+-
+-		port@8 {
+-			dsa-tag-protocol = "brcm-prepend";
+-		};
+ 	};
+ };
