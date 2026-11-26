@@ -192,10 +192,7 @@ h3600_do_upgrade() {
 
 	# Migration runs from the new initramfs. Clear the old rootfs and
 	# any misplaced UBI headers before sealing the new slot header.
-	# Normal upgrades leave the already-erased gap alone.
-	if [ -z "$(rootfs_type)" ]; then
-		mtd erase slot0_gap || nand_do_upgrade_failed
-	fi
+	mtd erase slot0_gap || nand_do_upgrade_failed
 
 	# Invalidate slot 0 first.  If the upgrade is interrupted, the
 	# bootloader then falls back to slot 1 instead of booting a
