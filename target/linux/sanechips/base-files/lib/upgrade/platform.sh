@@ -129,7 +129,8 @@ h3600_check_image() {
 	ubi=$(find_mtd_index ubi)
 	[ -n "$ubi" ] &&
 		[ "$(cat /sys/class/mtd/mtd"$ubi"/offset)" = "$((0x4700000))" ] &&
-		[ "$(cat /sys/class/mtd/mtd"$ubi"/size)" = "$((0x3900000))" ] || {
+		[ "$(cat /sys/class/mtd/mtd"$ubi"/size)" = "$((0x3900000))" ] &&
+		[ "$(cat /sys/class/mtd/mtd"$ubi"/erasesize)" = 131072 ] || {
 		echo "Boot the matching initramfs over TFTP before migrating to UBI"
 		return 1
 	}
