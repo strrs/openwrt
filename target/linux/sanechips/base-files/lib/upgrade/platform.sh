@@ -66,6 +66,43 @@ h3600_trailer_template() {
 	printf '\000\000\000\000\002\000\000\000\000\000\000\000\035\314\131\253'
 }
 
+h3600_512m_trailer_template() {
+	# The first 512 bytes of the factory slot-0 trailer (V9.0.0P5_TR,
+	# ZXHN H1600V9), with the length and CRC fields zeroed.
+	printf '\000\000\000\000\000\000\000\000\146\002\000\000\121\000\000\000'
+	printf '\126\071\056\060\056\060\120\065\137\124\122\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\001\000\000\000'
+	printf '\000\000\224\001\000\000\000\000\064\002\000\000\000\000\000\000'
+	printf '\000\000\000\000\024\002\070\000\000\000\000\000\000\000\320\000'
+	printf '\000\000\200\002\000\000\000\000\000\000\000\001\000\000\120\003'
+	printf '\000\000\200\002\000\000\000\000\000\000\000\001\132\130\110\116'
+	printf '\040\110\061\066\060\060\126\071\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\001\000\000\000'
+	printf '\001\000\000\000\000\000\000\000\062\060\062\061\060\062\062\062'
+	printf '\061\062\060\064\065\067\000\000\000\000\000\000\377\377\377\377'
+	printf '\377\377\377\377\000\000\000\040\000\000\001\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\063\063\063\063\146\146\146\146\231\231\231\231'
+	printf '\314\314\314\314\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+	printf '\000\000\320\000\000\000\120\003\000\000\120\003\000\000\320\005'
+	printf '\000\000\000\000\002\000\000\000\000\000\000\000\043\172\144\371'
+}
+
 h3600_crc32() {
 	# CRC32 of stdin, printed as 4 raw little-endian bytes.  The gzip
 	# trailer carries the standard CRC32 of the uncompressed data.
@@ -117,10 +154,30 @@ h3600_partition_serial() {
 	done
 }
 
+h3600_layout() {
+	case "$(board_name)" in
+	zte,zxhn-h3600-512m)
+		H3600_NAME="zte_zxhn-h3600-512m"
+		H3600_UBI_OFFSET=$((0x7100000))
+		H3600_UBI_SIZE=$((0x18f00000))
+		H3600_BLOCK=262144
+		H3600_TEMPLATE=h3600_512m_trailer_template
+		;;
+	*)
+		H3600_NAME="zte_zxhn-h3600"
+		H3600_UBI_OFFSET=$((0x4700000))
+		H3600_UBI_SIZE=$((0x3900000))
+		H3600_BLOCK=131072
+		H3600_TEMPLATE=h3600_trailer_template
+		;;
+	esac
+}
+
 h3600_check_image() {
 	local tar_file="$1" board_dir magic ubi klen
 
 	[ "$#" -eq 1 ] || return 1
+	h3600_layout
 	[ "$(get_magic_long "$tar_file")" = "73797375" ] || {
 		echo "Invalid image: expected an H3600 sysupgrade archive"
 		return 1
@@ -128,18 +185,18 @@ h3600_check_image() {
 
 	ubi=$(find_mtd_index ubi)
 	[ -n "$ubi" ] &&
-		[ "$(cat /sys/class/mtd/mtd"$ubi"/offset)" = "$((0x4700000))" ] &&
-		[ "$(cat /sys/class/mtd/mtd"$ubi"/size)" = "$((0x3900000))" ] &&
-		[ "$(cat /sys/class/mtd/mtd"$ubi"/erasesize)" = 131072 ] || {
+		[ "$(cat /sys/class/mtd/mtd"$ubi"/offset)" = "$H3600_UBI_OFFSET" ] &&
+		[ "$(cat /sys/class/mtd/mtd"$ubi"/size)" = "$H3600_UBI_SIZE" ] &&
+		[ "$(cat /sys/class/mtd/mtd"$ubi"/erasesize)" = "$H3600_BLOCK" ] || {
 		echo "Boot the matching initramfs over TFTP before migrating to UBI"
 		return 1
 	}
 
-	nand_do_platform_check "zte_zxhn-h3600" "$tar_file" || return 1
+	nand_do_platform_check "$H3600_NAME" "$tar_file" || return 1
 
 	board_dir=$(tar tf "$tar_file" | grep -m 1 '^sysupgrade-.*/$')
 	case "$board_dir" in
-	sysupgrade-zte_zxhn-h3600/|sysupgrade-zte,zxhn-h3600/) ;;
+	"sysupgrade-$H3600_NAME/"|"sysupgrade-$(board_name)/") ;;
 	*)
 		echo "Invalid image: expected the H3600 archive directory"
 		return 1
@@ -204,9 +261,9 @@ h3600_do_upgrade() {
 	nand_do_flash_file "$tar_file" || nand_do_upgrade_failed
 
 	# The erased block supplies the 0xff fill of the header block.
-	dd if=/dev/mtd"$(find_mtd_index trailer)" of="$trailer" bs=131072 count=1 2>/dev/null
-	[ "$(wc -c < "$trailer")" = 131072 ] || nand_do_upgrade_failed
-	h3600_trailer_template | h3600_put "$trailer" 0
+	dd if=/dev/mtd"$(find_mtd_index trailer)" of="$trailer" bs="$H3600_BLOCK" count=1 2>/dev/null
+	[ "$(wc -c < "$trailer")" = "$H3600_BLOCK" ] || nand_do_upgrade_failed
+	$H3600_TEMPLATE | h3600_put "$trailer" 0
 	h3600_u32le "$serial" | h3600_put "$trailer" $((0x1f4))
 	klen=$(($(tar xf "$tar_file" "$kernel" -O | wc -c) - 32))
 	h3600_u32le "$klen" | h3600_put "$trailer" $((0x34))
@@ -226,7 +283,7 @@ platform_check_image() {
 	local board=$(board_name)
 
 	case "$board" in
-	zte,zxhn-h3600)
+	zte,zxhn-h3600|zte,zxhn-h3600-512m)
 		h3600_check_image "$1"
 		return $?
 		;;
@@ -239,7 +296,7 @@ platform_do_upgrade() {
 	local board=$(board_name)
 
 	case "$board" in
-	zte,zxhn-h3600)
+	zte,zxhn-h3600|zte,zxhn-h3600-512m)
 		h3600_do_upgrade "$1"
 		;;
 	*)

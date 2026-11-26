@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+
+#include "zx279128s-zte-zxhn-h3600.dts"
+
+/ {
+	model = "ZTE ZXHN H3600 512M NAND";
+	compatible = "zte,zxhn-h3600-512m", "zte,zxhn-h3600", "zte,zx279128s";
+};
+
+&spifc {
+	flash@0 {
+		/delete-node/ partitions;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "bootloader";
+				reg = <0x0000000 0x0100000>;
+				read-only;
+			};
+
+			partition@100000 {
+				label = "tag";
+				reg = <0x0100000 0x0200000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_tag_1e: macaddr@1e {
+						compatible = "mac-base";
+						reg = <0x1e 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+				};
+			};
+
+			partition@300000 {
+				label = "wifi";
+				reg = <0x0300000 0x0200000>;
+				read-only;
+			};
+
+			partition@500000 {
+				label = "usercfg";
+				reg = <0x0500000 0x0400000>;
+				read-only;
+			};
+
+			partition@900000 {
+				label = "defcfg";
+				reg = <0x0900000 0x0400000>;
+				read-only;
+			};
+
+			partition@d00000 {
+				label = "kernel";
+				reg = <0x0d00000 0x0400000>;
+			};
+
+			partition@1100000 {
+				label = "slot0_gap";
+				reg = <0x1100000 0x2300000>;
+			};
+
+			partition@3400000 {
+				label = "trailer";
+				reg = <0x3400000 0x0100000>;
+			};
+
+			partition@3500000 {
+				label = "stock";
+				reg = <0x3500000 0x2800000>;
+				read-only;
+			};
+
+			partition@5d00000 {
+				label = "status";
+				reg = <0x5d00000 0x1400000>;
+				read-only;
+			};
+
+			partition@7100000 {
+				label = "ubi";
+				reg = <0x7100000 0x18f00000>;
+			};
+		};
+	};
+};

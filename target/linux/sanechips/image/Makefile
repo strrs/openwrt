@@ -57,4 +57,14 @@ define Device/zte_zxhn-h3600
 endef
 TARGET_DEVICES += zte_zxhn-h3600
 
+define Device/zte_zxhn-h3600-512m
+  $(Device/zte_zxhn-h3600)
+  DEVICE_VARIANT := 512M NAND
+  DEVICE_ALT0_VARIANT := 512M NAND
+  DEVICE_DTS := zx279128s-zte-zxhn-h3600-512m
+  BLOCKSIZE := 256k
+  PAGESIZE := 4096
+endef
+TARGET_DEVICES += zte_zxhn-h3600-512m
+
 $(eval $(call BuildImage))

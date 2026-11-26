@@ -6,7 +6,10 @@
 . /lib/functions.sh
 . /lib/functions/system.sh
 
-[ "$(board_name)" = zte,zxhn-h3600 ] || exit 0
+case "$(board_name)" in
+zte,zxhn-h3600|zte,zxhn-h3600-512m) ;;
+*) exit 0 ;;
+esac
 
 case "$(cat "/sys${DEVPATH}/device/modalias" 2>/dev/null)" in
 pci:v000014C3d00007915*) ;;

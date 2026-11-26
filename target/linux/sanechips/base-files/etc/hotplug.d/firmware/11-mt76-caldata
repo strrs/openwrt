@@ -31,7 +31,7 @@ case "$FIRMWARE" in
 "mediatek/mt7915_eeprom.bin"|\
 "mediatek/mt7915_eeprom_dbdc.bin")
 	case "$board" in
-	zte,zxhn-h3600)
+	zte,zxhn-h3600|zte,zxhn-h3600-512m)
 		zte_caldata_from_jffs2
 		;;
 	esac
